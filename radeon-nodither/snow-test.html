@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Snow test</title>
+<style>
+html,body{margin:0;height:100%;background:#000;color:#666;font:14px sans-serif;cursor:pointer}
+#g{display:flex;height:100%}
+#g div{flex:1;display:flex;align-items:flex-end;justify-content:center;padding-bottom:20px}
+#full{position:fixed;inset:0;display:none}
+</style></head><body>
+<div id="g"></div><div id="full"></div>
+<script>
+const lv=[0,4,8,16,24,32,48,64];
+const g=document.getElementById('g'),f=document.getElementById('full');
+lv.forEach(v=>{const d=document.createElement('div');d.style.background=`rgb(${v},${v},${v})`;d.textContent=v;
+ d.onclick=()=>{document.documentElement.requestFullscreen?.();f.style.background=d.style.background;f.style.display='block'};g.appendChild(d)});
+f.onclick=()=>{f.style.display='none'};
+document.onkeydown=e=>{if(e.key==='f')document.documentElement.requestFullscreen?.()};
+</script>
+<p style="position:fixed;top:8px;left:8px;margin:0">Press F for fullscreen. Click a band to fill the screen with it, click again to return. Numbers are grey level (0 = pure black). Dithering shows as faint moving grain on the grey bands but not on 0.</p>
+</body></html>

@@ -1,0 +1,12 @@
+[Unit]
+Description=Disable Radeon panel dithering (removes "snow" on dark greys)
+After=display-manager.service suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+# Runs once at boot and again after each resume, then exits.
+# Type=exec so boot and resume don't wait for its 30 s re-check.
+Type=exec
+ExecStart=/usr/local/sbin/radeon-nodither off
+
+[Install]
+WantedBy=graphical.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
