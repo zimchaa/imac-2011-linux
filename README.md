@@ -96,7 +96,7 @@ Notes:
 - It copies `user_settings.py` into every Proton version Steam has installed, including custom builds in `compatibilitytools.d`. It won't overwrite a different `user_settings.py` that's already there.
 - Run it again after Steam installs a new Proton version, or after switching a game to one. Updates to an existing Proton version keep the file.
 - It also turns on Proton logging, which writes `~/steam-<appid>.log` for each game. Delete that line from `user_settings.py` if you don't want the logs.
-- For a single game, the launch option `PROTON_USE_WINED3D=1 %command%` does the same thing. For Unity games, `%command% -force-glcore` makes the game use OpenGL itself and is worth trying if WineD3D misbehaves.
+- For a single game, the launch option `PROTON_USE_WINED3D=1 %command%` does the same thing. For Unity games that show rendering glitches under WineD3D, try `%command% -force-feature-level-10-1`. It stops Unity using Direct3D 11.1 features, which WineD3D offers on the Radeon. Unity's `-force-glcore` only works if the developers included OpenGL shaders in the Windows build. Cult of the Lamb doesn't, and fails with `InitializeEngineGraphics failed`.
 - Games that need Direct3D 12 still won't run: WineD3D doesn't support it, and the alternative, vkd3d-proton, needs Vulkan too.
 - Cult of the Lamb starts with this fix but doesn't run perfectly. Expect old-GPU performance with 512 MB of VRAM.
 
