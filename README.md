@@ -98,7 +98,7 @@ Notes:
 - It also turns on Proton logging, which writes `~/steam-<appid>.log` for each game. Delete that line from `user_settings.py` if you don't want the logs.
 - For a single game, the launch option `PROTON_USE_WINED3D=1 %command%` does the same thing. For Unity games that show rendering glitches under WineD3D, try `%command% -force-feature-level-10-1`. It stops Unity using Direct3D 11.1 features, which WineD3D offers on the Radeon. Unity's `-force-glcore` only works if the developers included OpenGL shaders in the Windows build. Cult of the Lamb doesn't, and fails with `InitializeEngineGraphics failed`.
 - Games that need Direct3D 12 still won't run: WineD3D doesn't support it, and the alternative, vkd3d-proton, needs Vulkan too.
-- Cult of the Lamb starts with this fix but doesn't run perfectly. Expect old-GPU performance with 512 MB of VRAM.
+- Cult of the Lamb runs well with this fix, as long as games are on the Radeon (see [Games running on the Intel GPU](#games-running-on-the-intel-gpu)). It once showed a corrupted screen that went away on its own; if that happens repeatedly, try `-force-feature-level-10-1`.
 
 ## Startup chime
 
