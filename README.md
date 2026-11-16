@@ -11,6 +11,7 @@ Notes and fixes for running Linux on a mid-2011 27" iMac (**iMac12,2**). Tested 
 | Video playback uses lots of CPU | [H.264 hardware decoding](#hardware-video-decoding-h264) |
 | Which Steam games are native Linux, and Tomb Raider won't start | [`steam-games/`](steam-games/) |
 | Startup chime ("bong") at every power-on | [`startup-chime/`](startup-chime/) |
+| Text consoles (Ctrl+Alt+F4–F6) use a 1024×768-sized grid | [`kmscon/`](kmscon/) |
 
 ## Fresh install checklist
 
@@ -22,6 +23,7 @@ cd imac-2011-linux
 
 sudo ./radeon-nodither/install.sh     # remove display snow
 sudo systemctl disable --now switcheroo-control   # keep games off the Intel GPU
+sudo install -m 644 kmscon/kmscon.conf /etc/kmscon/kmscon.conf   # full-size text consoles
 ./startup-chime/chime.sh              # check the chime; usually still muted (stored in firmware)
 sudo ./startup-chime/chime.sh mute    # only if it says "on"
 ./proton-wined3d/install.sh           # as your user, after Steam has installed Proton
@@ -44,7 +46,24 @@ What that means in practice:
 - **OpenGL:** Mesa reports **OpenGL 4.6** core and compatibility profiles on the Radeon, so games and apps that need OpenGL 3.3 or newer will start. The GPU is from 2011 with 512 MB of VRAM, so expect to need low settings.
 - **Vulkan:** neither GPU supports it. Mesa's AMD Vulkan driver (RADV) needs GCN or newer, and its Intel drivers start at Ivy Bridge. The only Vulkan available is the CPU-based `lavapipe`, which is far too slow for games. Pick OpenGL whenever there's a choice.
 - **`amdgpu` driver:** doesn't support TeraScale cards, so this machine stays on `radeon`.
-- **Phantom VGA output:** the Radeon reports a connected 1024×768 `VGA-2` display that doesn't exist. If the mouse disappears off one edge of the screen, turn it off in Settings → Displays.
+- **Phantom VGA output:** the Radeon reports a connected 1024×768 `VGA-2` display that doesn't exist. If the mouse disappears off one edge of the screen, turn it off in Settings → Displays. It also shrinks the text consoles; see [Text consoles](#text-consoles-ctrlaltf4f6).
+
+## Text consoles (Ctrl+Alt+F4–F6)
+
+**Symptom:** the text consoles show a grid sized for a 1024×768 screen (128×45) on the 2560×1440 panel.
+
+**Cause:** Fedora runs the text consoles with **kmscon**, not the kernel's built-in console. kmscon draws on every connected output, including the phantom 1024×768 `VGA-2`, and shrinks the text grid to fit the smallest one.
+
+**Fix:** tell kmscon to ignore `VGA-2`. [`kmscon/kmscon.conf`](kmscon/kmscon.conf) contains one line, `screen=[VGA-2]disabled`:
+
+```
+sudo install -m 644 kmscon/kmscon.conf /etc/kmscon/kmscon.conf
+sudo systemctl restart kmsconvt@tty6     # or reboot; same for tty4 and tty5
+```
+
+The console then fills the panel (320×84 here). For bigger text, add a line such as `font-size=24` to the file (the font's height in pixels; 0 means automatic) and restart the console again. `journalctl -u 'kmsconvt@*' | grep -E 'Display|Resized'` shows which outputs kmscon is using and the grid size it picked.
+
+The kernel option `video=VGA-2:d` would hide the phantom output from everything, GNOME included, but it changes the boot command line and hasn't been tested here.
 
 ## Display "snow" (dithering)
 
