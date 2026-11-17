@@ -16,6 +16,7 @@
 #   -r FPS    frame rate (default 30)
 #   -s WxH    output size, max 2048x2048 (default 1920x1080)
 #   -q QP     quality, lower = better and bigger, 18-30 is sensible (default 24)
+#   -b RATE   cap the size instead: average bitrate like 6M (replaces -q)
 #   -c MODE   gpu = Intel converts colours (default, ~30% of one core)
 #             cpu = CPU converts colours (exact colours, ~77% of one core)
 #   -n        dry run: print the ffmpeg command and exit
@@ -32,15 +33,16 @@ user=${SUDO_USER:-$(id -un)}
 home=$(getent passwd "$user" | cut -d: -f6)
 
 out="$home/Videos/screen-$(date +%Y%m%d-%H%M%S).mp4"
-secs="" fps=30 size=1920x1080 qp=24 csc=gpu dry=0
+secs="" fps=30 size=1920x1080 qp=24 rate="" csc=gpu dry=0
 
-while getopts "o:t:r:s:q:c:nh" opt; do
+while getopts "o:t:r:s:q:b:c:nh" opt; do
     case $opt in
         o) out=$OPTARG ;;
         t) secs=$OPTARG ;;
         r) fps=$OPTARG ;;
         s) size=$OPTARG ;;
         q) qp=$OPTARG ;;
+        b) rate=$OPTARG ;;
         c) csc=$OPTARG ;;
         n) dry=1 ;;
         *) sed -n '/^# usage/,/^#   -n/s/^# \{0,1\}//p' "$0"; exit 1 ;;
@@ -56,6 +58,7 @@ w=${BASH_REMATCH[1]} h=${BASH_REMATCH[2]}
 [[ $fps =~ ^[0-9]+$ ]] || die "fps must be a whole number"
 [[ $qp =~ ^[0-9]+$ ]] && (( qp <= 51 )) || die "qp must be 0-51"
 [[ -z $secs || $secs =~ ^[0-9]+([.][0-9]+)?$ ]] || die "seconds must be a number"
+[[ -z $rate || $rate =~ ^[0-9]+(\.[0-9]+)?[kKmM]?$ ]] || die "bitrate must look like 6M or 4500k"
 [[ $csc == gpu || $csc == cpu ]] || die "-c must be gpu or cpu"
 
 # --- find the two GPUs by driver --------------------------------------------
@@ -70,6 +73,16 @@ find_node() {   # $1 = driver, $2 = card|renderD
 }
 radeon_card=$(find_node radeon card)       # owns the screen: capture from here
 intel_render=$(find_node i915 renderD)     # has the H.264 encoder
+
+# Constant quality (-qp) keeps the picture quality the same and lets the size
+# vary: full-screen video can take 15+ Mbit/s. A bitrate cap (-b) switches
+# the encoder to variable bitrate averaging that rate, peaks up to 1/3 higher.
+if [[ -n $rate ]]; then
+    bps=$(numfmt --from=si "${rate^^}")
+    ratectl=(-b:v "$bps" -maxrate $((bps * 4 / 3)))
+else
+    ratectl=(-qp "$qp")
+fi
 
 # --- build the filter chain -------------------------------------------------
 # kmsgrab hands over the Radeon's framebuffer as a DRM PRIME (dma-buf) frame.
@@ -95,7 +108,7 @@ cmd=(ffmpeg -hide_banner -loglevel warning -stats -y
      -device "$radeon_card" -framerate "$fps" -f kmsgrab -i screen
      ${secs:+-t "$secs"}
      -vf "$vf"
-     -c:v h264_vaapi -qp "$qp"                      # constant quality, Intel encoder
+     -c:v h264_vaapi "${ratectl[@]}"                # Intel encoder
      -movflags +faststart                           # index at the front, for playback/sharing
      "$out")
 

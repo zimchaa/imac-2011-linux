@@ -204,60 +204,81 @@ vainfo --display drm --device /dev/dri/renderD128
 
 ## Screen recording with the Intel H.264 encoder
 
-The Intel HD 3000 isn't connected to the panel, but its H.264 encoder still works. [`screen-recording/screen-record.sh`](screen-recording/screen-record.sh) uses it to record the screen at 1920×1080, 30 fps, using about **30% of one CPU core**:
+The Intel HD 3000 isn't connected to the panel, but its H.264 encoder still works. Two scripts in [`screen-recording/`](screen-recording/) use it, so recording the screen doesn't load the CPU:
+
+| | [`portal-record.py`](screen-recording/portal-record.py) (recommended) | [`screen-record.sh`](screen-recording/screen-record.sh) |
+|---|---|---|
+| Root | Not needed | Needed |
+| Choosing what to record | GNOME's "share your screen" dialog: a monitor or a window | Always the whole screen |
+| Mouse pointer | Recorded | Usually missing |
+| Audio | Desktop, microphone or both | None |
+| Capture route | GNOME → PipeWire → GStreamer | Display driver (`kmsgrab`) |
 
 ```
-sudo ./screen-recording/screen-record.sh            # until q or Ctrl+C, to ~/Videos/screen-<date>.mp4
-sudo ./screen-recording/screen-record.sh -t 60 -o demo.mp4
-./screen-recording/screen-record.sh -n              # print the ffmpeg command without recording
+./screen-recording/portal-record.py                 # pick a screen; stop with Ctrl+C or GNOME's stop button
+./screen-recording/portal-record.py -w -a desktop   # offer windows too, record what's playing
+./screen-recording/portal-record.py -b 6M           # cap the size at ~45 MB a minute
+
+sudo ./screen-recording/screen-record.sh            # whole screen until q or Ctrl+C
 ```
+
+Both save to `~/Videos/screen-YYYYMMDD-HHMMSS.mp4` by default and share most options:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `-o FILE` | `~/Videos/screen-YYYYMMDD-HHMMSS.mp4` | Output file |
-| `-t SECS` | until `q` / Ctrl+C | Recording length |
+| `-o FILE` | `~/Videos/screen-<date>.mp4` | Output file |
+| `-t SECS` | until stopped | Recording length |
 | `-r FPS` | `30` | Frame rate |
-| `-s WxH` | `1920x1080` | Output size; at most 2048 in either direction |
-| `-q QP` | `24` | Quality: lower is better and bigger; 18–30 is sensible |
-| `-c MODE` | `gpu` | Colour conversion on the Intel GPU (`gpu`) or the CPU (`cpu`) |
-| `-n` | | Dry run: print the ffmpeg command |
+| `-s WxH` | `1920x1080` | Largest output size; at most 2048 in either direction |
+| `-q QP` | `24` | Constant quality: lower is better and bigger; 18–30 is sensible |
+| `-b RATE` | | Cap the size instead: average bitrate such as `6M`; replaces `-q` |
+| `-n` | | Dry run: print the commands without recording |
+| `-w` | | `portal-record.py` only: offer windows as well as monitors |
+| `-a SRC` | `none` | `portal-record.py` only: audio from `desktop`, `mic` or `both`, as AAC |
+| `-c MODE` | `gpu` | `screen-record.sh` only: colour conversion on the Intel GPU (`gpu`) or the CPU (`cpu`) |
 
-It needs only `ffmpeg` and the Intel VA driver: `sudo dnf install ffmpeg-free libva-intel-driver`. Fedora's own `ffmpeg-free` is enough, because the encoding happens in the GPU driver, not in ffmpeg. Check the encoder is there with `vainfo --display drm --device /dev/dri/renderD129`: the `Intel i965 driver ... Sandybridge` should list `VAEntrypointEncSlice` for `VAProfileH264Main` and `High`. The script finds the two GPUs by driver name, so it doesn't matter which is `card1` or `renderD129`.
+**File size.** With the default constant quality, the size depends on what's on screen. A desktop with terminals and browsing ran at 4–6 Mbit/s (30–45 MB a minute). Full-screen 4K video ran at 15–19 Mbit/s. Re-encoding that video stretch gave these bitrates:
 
-**Limitations:**
-- It needs root, because capturing the screen this way (`kmsgrab`) can read anything on it.
-- It records video only, with no audio.
-- The mouse pointer usually isn't recorded. The display draws it on a separate hardware layer, not in the screen image that gets captured.
-- It always records the whole screen, not a single window.
-- At the start, libva prints `iHD_drv_video.so init failed` and `hybrid_drv_video.so` messages while it looks for the right Intel driver. They're harmless.
+| | `-q 24` | `-q 28` | `-q 32` | `-b 6M` |
+|---|---|---|---|---|
+| Desktop | 5.8 Mbit/s | 4.4 | 3.8 | – |
+| Full-screen video | 15.4 Mbit/s | 9.4 | 6.5 | 6.1 |
 
-GNOME's built-in recorder (Ctrl+Shift+Alt+R) doesn't need root and handles the pointer, windows and areas. It encodes on the CPU, though, because GStreamer has no VA encoder plugin installed.
+**Requirements:** `sudo dnf install ffmpeg-free libva-intel-driver`. Fedora's own `ffmpeg-free` is enough, because the encoding happens in the GPU driver, not in ffmpeg. `portal-record.py` also uses GStreamer's VA plugin (`gstreamer1-plugins-bad-free`) and `pipewiresrc` (`pipewire-gstreamer`), which a GNOME install already has. Check the encoder with `vainfo --display drm --device /dev/dri/renderD129`: the `Intel i965 driver ... Sandybridge` should list `VAEntrypointEncSlice` for `VAProfileH264Main` and `High`. Both scripts find the GPUs by driver name, so it doesn't matter which is `card1` or `renderD129`.
+
+The `iHD_drv_video.so init failed` and `hybrid_drv_video.so` messages at the start are harmless. libva first tries Intel's newer driver, which only supports Broadwell and later, before settling on the old `i965` driver that handles Sandy Bridge.
 
 ### How it works
 
-The screen is wired to the Radeon, which can't encode video. The Intel GPU has an H.264 encoder but no screen. So each frame is captured on the Radeon, made smaller there, copied to the Intel GPU and encoded:
+The screen is wired to the Radeon, which can't encode video. The Intel GPU has an H.264 encoder but no screen. So each frame is made smaller on the Radeon, copied to the Intel GPU and encoded there. The two scripts differ only in how they get the frame:
 
 ```mermaid
 flowchart LR
-    subgraph R["Radeon HD 6770M (card1)"]
-        FB["Screen buffer<br/>2560×1440 RGB"] -->|"1. kmsgrab + hwmap<br/>(shared, no copy)"| SC["2. VA scaler<br/>→ 1920×1080 RGB"]
+    subgraph R["Radeon HD 6770M"]
+        FB["Screen<br/>2560×1440 BGRx"] --> SC["VA video processor<br/>scale → 1920×1080 RGB"]
     end
-    subgraph I["Intel HD 3000 (renderD129)"]
-        CSC["4. VA video processor<br/>RGB → NV12"] --> ENC["5. H.264 encoder"]
+    subgraph I["Intel HD 3000"]
+        CSC["VA video processor<br/>RGB → NV12"] --> ENC["H.264 encoder"]
     end
-    SC -->|"3. hwdownload → system RAM → hwupload<br/>~8 MB per frame, ~250 MB/s"| CSC
+    SC -->|"system RAM<br/>~8 MB per frame"| CSC
     ENC --> MP4[("screen.mp4")]
 ```
 
-1. **Capture (`kmsgrab`).** ffmpeg asks the display driver which buffer is on screen right now: 2560×1440, 32-bit RGB, stored row by row. It gets a shared handle to that buffer (a dma-buf) rather than a copy, and `hwmap` hands it to the Radeon's VA-API driver, so nothing has moved yet. This step is why root is needed.
-2. **Scale on the Radeon (`scale_vaapi`).** The Radeon's video processor shrinks the frame to 1920×1080 and keeps it in RGB. Shrinking is required because the Sandy Bridge encoder rejects anything wider or taller than 2048 pixels.
-3. **Copy to the Intel GPU (`hwdownload` → `hwupload`).** The two GPUs can't share memory, so the frame goes through main memory. Scaling first keeps this to about 8 MB per frame instead of 14.7 MB.
-4. **Convert the colour format.** The encoder takes NV12, a YUV format, rather than RGB. By default the Intel GPU's video processor converts it (`scale_vaapi=format=nv12`). With `-c cpu`, ffmpeg converts it on the processor before the copy in step 3.
-5. **Encode (`h264_vaapi`).** The Intel GPU encodes H.264 High profile with a fixed quality setting (`-qp`).
+1. **Getting the frame.**
+   - `screen-record.sh` uses ffmpeg's `kmsgrab`. It asks the display driver which buffer is on screen and gets a shared handle to it (a dma-buf) instead of a copy, so nothing moves yet. Reading the screen this way needs root.
+   - `portal-record.py` asks GNOME through the ScreenCast portal, the same dialog browsers use for screen sharing. GNOME then streams frames over PipeWire as dma-bufs, with the pointer drawn in, and GStreamer's `pipewiresrc` receives them.
+2. **Scaling on the Radeon.** The Radeon's video processor (`scale_vaapi` in ffmpeg, `vapostproc` in GStreamer) shrinks the frame to 1920×1080. Shrinking is required: the Sandy Bridge encoder, and its video processor, reject anything wider or taller than 2048 pixels. The output stays RGB, because the Radeon's RGB→NV12 conversion gets the colours wrong.
+3. **Copying to the Intel GPU.** The two GPUs can't share memory, so the frame goes through main memory. Scaling first keeps this to about 8 MB per frame instead of 14.7 MB. In `portal-record.py`, GStreamer first evens the frame rate out to a steady 30 fps with `videorate`, because GNOME only sends a frame when something changes. It then hands the frames to ffmpeg over a pipe.
+4. **Converting the colour format.** The encoder takes NV12, a YUV format, rather than RGB. The Intel GPU's video processor converts it. `screen-record.sh -c cpu` does it on the processor instead.
+5. **Encoding.** ffmpeg's `h264_vaapi` encodes H.264 High profile on the Intel GPU. `portal-record.py` adds audio from PulseAudio (`@DEFAULT_MONITOR@` is what's playing through the speakers) as AAC.
+
+**Why `portal-record.py` uses both GStreamer and ffmpeg:** only GStreamer can receive the PipeWire stream, but its own VA H.264 encoder is broken with the i965 driver. Every P-frame came out nearly as big as a keyframe, about 20 times bigger than ffmpeg's: a 3-second still screen took 21.8 MB against 1.0 MB.
+
+**Why GNOME's built-in recorder (Ctrl+Shift+Alt+R) can't use the Intel encoder:** it would need `GST_VA_ALL_DRIVERS=1`, because GStreamer blocks i965 encoding by default. It would also need `LIBVA_DRIVER_NAME=i965`, so that the Intel GPU gets the `vah264enc` name GNOME looks for. Even then, GNOME sends the full 2560×1440 frame in without scaling it, over the Intel limit. It also sends BGRx, which the Intel video processor doesn't accept. So it stays on the CPU (openh264).
 
 ### Approaches compared
 
-CPU use is percent of one core (the machine has four), measured over a 10-second, 30 fps recording of the desktop at 1920×1080.
+CPU use is percent of one core (the machine has four), measured over a 10-second, 30 fps recording of the desktop at 1920×1080, using `screen-record.sh`.
 
 | Approach | CPU | Result |
 |---|---|---|
@@ -265,9 +286,10 @@ CPU use is percent of one core (the machine has four), measured over a 10-second
 | CPU reads the screen buffer directly | – | ❌ Crashes with a bus error (SIGBUS): the CPU can't read the Radeon's screen buffer directly |
 | **Radeon scales (RGB), Intel converts and encodes** (`-c gpu`, default) | **30%** | ✅ Correct colours, steady 30 fps, ~4.4 Mbit/s |
 | Radeon scales (RGB), CPU converts, Intel encodes (`-c cpu`) | 77% | ✅ Correct colours, steady 30 fps, ~5.0 Mbit/s |
+| GStreamer's own Intel encoder (`vah264enc`) | – | ❌ Works, but files are ~20× bigger (broken P-frames with i965) |
 | Software x264 (`-preset veryfast`), for reference | ~270% | Synthetic 2560×1440 test, not a screen recording |
 
-The default needs less than half the CPU of `-c cpu`, and frames from the two recordings look the same. On a test pattern, the Intel conversion made pure 100% colours slightly less saturated, probably because it handles colour range differently; it doesn't show on normal desktop content. Use `-c cpu` when colours must be exact. The x264 figure is only a rough guide, since it came from a synthetic full-size clip, but it shows that encoding H.264 on the processor alone would take most of the CPU.
+The `-c gpu` default needs less than half the CPU of `-c cpu`, and frames from the two recordings look the same. On a test pattern, the Intel conversion made pure 100% colours slightly less saturated, probably because it handles colour range differently; it doesn't show on normal desktop content. The x264 figure is only a rough guide, since it came from a synthetic full-size clip, but it shows that encoding H.264 on the processor alone would take most of the CPU.
 
 ## Steam: native Linux games
 
